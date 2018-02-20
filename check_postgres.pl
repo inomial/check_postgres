@@ -7998,16 +7998,25 @@ FROM pg_sequences) foo};
     my $MAXINT8 = 9223372036854775807;
 
     my $limit = 0;
+    my $maxp = 0;
+    my %seqinfo;
+
+    ## Keep track of which database we are on, to allow dbnumber to work
+    my $num = 0;
 
     for $db (@{$info->{db}}) {
+        $num++;
         my (@crit,@warn,@ok);
-        my $maxp = 0;
-        my %seqinfo;
+        # In MRTG mode we want an aggregate summary of all the dbs, otherwise it's per db so reset these values on each db
+        if(!$MRTG) {
+            $maxp = 0;
+            undef %seqinfo;
+        }
         my %seqperf;
         my $multidb = @{$info->{db}} > 1 ? "$db->{dbname}." : '';
         my @seq_sql;
         for my $r (@{$db->{slurp}}) { # for each sequence, create SQL command to inspect it
-            next if ($db->{version} >= 10); # TODO: skip loop entirely
+            next if ($info->{db}[0]{version} >= 10); # TODO: skip loop entirely
             my ($schema, $seq, $seqname, $typename) = @$r{qw/ nspname seqname safename typname /};
             next if skip_item($seq);
             my $maxValue = $typename eq 'int2' ? $MAXINT2 : $typename eq 'int4' ? $MAXINT4 : $MAXINT8;
@@ -8024,13 +8033,13 @@ FROM (
 FROM $seqname) foo
 };
         }
-        if ($db->{version} >= 10) {
+        if ($info->{db}[0]{version} >= 10) {
             @seq_sql = ($SQL10); # inject PG10 query here (TODO: pull this out of loops)
         }
         # Use UNION ALL to query multiple sequences at once, however if there are too many sequences this can exceed
         # maximum argument length; so split into chunks of 200 sequences or less and iterate over them.
         while (my @seq_sql_chunk = splice @seq_sql, 0, 200) {
-            my $seqinfo = run_command(join("\nUNION ALL\n", @seq_sql_chunk), { target => $db }); # execute all SQL commands at once
+            my $seqinfo = run_command(join("\nUNION ALL\n", @seq_sql_chunk), { dbnumber => $num }); # execute all SQL commands at once
             for my $r2 (@{$seqinfo->{db}[0]{slurp}}) { # now look at all results
                 my ($seqname, $last, $slots, $used, $percent, $left) = @$r2{qw/ seqname last_value slots used percent numleft / };
                 if (! defined $last) {
@@ -8042,7 +8051,7 @@ FROM $seqname) foo
                 if ($percent >= $maxp) {
                     $maxp = $percent;
                     if (! exists $opt{perflimit} or $limit++ < $opt{perflimit}) {
-                        push @{$seqinfo{$percent}} => $MRTG ? [$seqname,$percent,$slots,$used,$left] : $msg;
+                        push @{$seqinfo{$percent}} => $MRTG ? [$nicename,$percent,$slots,$used,$left] : $msg;
                     }
                 }
                 next if $MRTG;
@@ -8055,10 +8064,8 @@ FROM $seqname) foo
                 }
             }
         }
-        if ($MRTG) {
-            my $msg = join ' | ' => map { $_->[0] } @{$seqinfo{$maxp}};
-            do_mrtg({one => $maxp, msg => $msg});
-        }
+        next if $MRTG;
+
         $limit = 0;
         PERF: for my $val (sort { $b <=> $a } keys %seqperf) {
             for my $seq (sort { $seqperf{$val}{$a}->[0] <=> $seqperf{$val}{$b}->[0] or $a cmp $b } keys %{$seqperf{$val}}) {
@@ -8081,6 +8088,10 @@ FROM $seqname) foo
                 add_ok msg('seq-none');
             }
         }
+    }
+    if ($MRTG) {
+        my $msg = join ' | ' => map { $_->[0] } @{$seqinfo{$maxp}};
+        do_mrtg({one => $maxp, msg => $msg});
     }
 
     return;
