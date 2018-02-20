@@ -7937,6 +7937,10 @@ sub check_sequence {
     (my $w = $warning) =~ s/\D//;
     (my $c = $critical) =~ s/\D//;
 
+    my $MAXINT2 = 32767;
+    my $MAXINT4 = 2147483647;
+    my $MAXINT8 = 9223372036854775807;
+
     ## Gather up all sequence names
     ## no critic
     my $SQL = q{
@@ -7966,7 +7970,7 @@ FROM (
  JOIN pg_attribute ON (attrelid, attnum) = (adrelid, adnum)
  JOIN pg_type on pg_type.oid = atttypid
  JOIN pg_class rel ON rel.oid = attrelid
- JOIN pg_class seq ON seq.relname = regexp_replace(adsrc, $re$^nextval\('(.+?)'::regclass\)$$re$, $$\1$$)
+ JOIN pg_class seq ON (seq.relname = regexp_replace(adsrc, $re$^nextval\('(.+?)'::regclass\)$$re$, $$\1$$) or seq.relname = regexp_replace(adsrc, $re$^nextval\('.+\.(.+?)'::regclass\)$$re$, $$\1$$))
  AND seq.relnamespace = rel.relnamespace
  JOIN pg_namespace nsp ON nsp.oid = seq.relnamespace
  WHERE adsrc ~ 'nextval' AND seq.relkind = 'S' AND typname IN ('int2', 'int4', 'int8')
@@ -7986,16 +7990,18 @@ SELECT seqname, last_value, slots, used, $percsql AS percent,
 FROM (
  SELECT quote_ident(schemaname)||'.'||quote_ident(sequencename) AS seqname, COALESCE(last_value,min_value) AS last_value,
   cycle,
-  CEIL((max_value-min_value::NUMERIC+1)/increment_by::NUMERIC) AS slots,
+  CEIL((LEAST(max_value, CASE WHEN s2.typname = 'int2' THEN $MAXINT2
+                              WHEN s2.typname = 'int4' THEN $MAXINT4
+                              ELSE $MAXINT8
+                         END)-min_value::NUMERIC+1)/increment_by::NUMERIC) AS slots,
   CEIL((COALESCE(last_value,min_value)-min_value::NUMERIC+1)/increment_by::NUMERIC) AS used
-FROM pg_sequences) foo};
+FROM pg_sequences s1
+LEFT JOIN ($SQL) s2 ON (quote_ident(s1.schemaname)||'.'||quote_ident(s1.sequencename) = s2.safename)
+) foo
+};
     ## use critic
 
     my $info = run_command($SQL, {regex => qr{\w}, emptyok => 1, version => [">9.6 SELECT 1"]} ); # actual SQL10 is executed below
-
-    my $MAXINT2 = 32767;
-    my $MAXINT4 = 2147483647;
-    my $MAXINT8 = 9223372036854775807;
 
     my $limit = 0;
     my $maxp = 0;
