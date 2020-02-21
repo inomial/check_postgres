@@ -7970,10 +7970,10 @@ FROM (
  JOIN pg_attribute ON (attrelid, attnum) = (adrelid, adnum)
  JOIN pg_type on pg_type.oid = atttypid
  JOIN pg_class rel ON rel.oid = attrelid
- JOIN pg_class seq ON (seq.relname = regexp_replace(adsrc, $re$^nextval\('(.+?)'::regclass\)$$re$, $$\1$$) or seq.relname = regexp_replace(adsrc, $re$^nextval\('.+\.(.+?)'::regclass\)$$re$, $$\1$$))
+ JOIN pg_class seq ON (seq.relname = regexp_replace(pg_get_expr(adbin, adrelid), $re$^nextval\('(.+?)'::regclass\)$$re$, $$\1$$) or seq.relname = regexp_replace(pg_get_expr(adbin, adrelid), $re$^nextval\('.+\.(.+?)'::regclass\)$$re$, $$\1$$))
  AND seq.relnamespace = rel.relnamespace
  JOIN pg_namespace nsp ON nsp.oid = seq.relnamespace
- WHERE adsrc ~ 'nextval' AND seq.relkind = 'S' AND typname IN ('int2', 'int4', 'int8')
+ WHERE pg_get_expr(adbin, adrelid) ~ 'nextval' AND seq.relkind = 'S' AND typname IN ('int2', 'int4', 'int8')
  UNION ALL
  -- all sequences, to catch those whose associations are not obviously recorded in pg_catalog
  SELECT nspname, relname, CAST('int8' AS TEXT)
